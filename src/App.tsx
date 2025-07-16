@@ -1,59 +1,99 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Shield, Users, DollarSign, Shirt, Plus, ArrowLeft, Sun, Moon, UserPlus, Home, Settings, Edit, Camera, Newspaper, Heart, MessageCircle, Share2, Bookmark, Search, LogOut, UserCircle, Check } from 'lucide-react';
+import { supabase } from './supabaseClient'; // Import the Supabase client
+import { Session, User } from '@supabase/supabase-js';
 
-// --- MOCK DATABASE ---
-// This data is included to make the frontend prototype fully interactive.
-// In a real application, this data would come from a backend API.
-
-let initialMockUsers = {
-    'fan@example.com': { id: 'fan1', name: 'Alex', email: 'fan@example.com', password: 'password', role: 'fan', followedClubs: [1, 3], avatar: 'https://placehold.co/100x100/A78BFA/FFFFFF?text=A', bio: 'Superfan of the Mountain Lions! Never miss a game.' },
-    'creator@example.com': { id: 'creator1', name: 'Coach Taylor', email: 'creator@example.com', password: 'password', role: 'creator', managedClubs: [1], avatar: 'https://placehold.co/100x100/F472B6/FFFFFF?text=C', bio: 'Leading the Lions to victory.' },
+// --- Type Definitions ---
+// It's good practice to define the shapes of your data
+type Profile = {
+    id: string;
+    full_name: string;
+    avatar_url: string;
+    role: 'fan' | 'creator';
+    bio?: string;
+    followed_clubs?: number[];
+    managed_clubs?: number[];
 };
 
-let initialMockClubs = [
-    { 
-        id: 1, 
-        name: 'Mountain Lions FC', 
-        sport: 'Soccer', 
-        logo: 'https://placehold.co/150x150/f0abfc/4a044e?text=🦁', 
-        tagline: 'Roaring to Victory', 
-        description: 'The fiercest soccer club on the mountain.',
-        creatorId: 'creator1',
-        players: [
-            { id: 1, name: 'Leo Messi', position: 'Forward', number: 10, avatar: 'https://placehold.co/100x100/3B82F6/FFFFFF?text=LM' },
-            { id: 2, name: 'Jane Doe', position: 'Midfielder', number: 8, avatar: 'https://placehold.co/100x100/10B981/FFFFFF?text=JD' },
-        ],
-        funding: { current: 7500, goal: 10000 }, 
-        merch: [
-            { id: 1, name: 'Home Jersey', price: 59.99, image: 'https://placehold.co/300x300/3B82F6/FFFFFF?text=Jersey' },
-            { id: 2, name: 'Team Scarf', price: 24.99, image: 'https://placehold.co/300x300/10B981/FFFFFF?text=Scarf' }
-        ],
-        posts: [
-            { id: 1, text: 'Big win last night! 3-1 against the Vipers. Thanks for the amazing support!', image: 'https://placehold.co/600x400/3B82F6/FFFFFF?text=Victory!', timestamp: new Date('2025-06-28T20:00:00'), likes: 125, comments: [{id: 1, userId: 'fan1', text: 'What a game! Incredible performance.'}, {id: 2, userId: 'creator1', text: 'Couldn\'t have done it without you all!'}] },
-            { id: 2, text: 'Next practice is tomorrow at 5 PM. Be ready to work hard!', image: null, timestamp: new Date('2025-06-27T11:00:00'), likes: 42, comments: [] }
-        ]
-    },
-    { id: 2, name: 'City Hawks Basketball', sport: 'Basketball', logo: 'https://placehold.co/150x150/fca5a5/7f1d1d?text=🦅', tagline: 'Soaring above the competition.', description: 'Downtown\'s premier basketball team.', creatorId: 'creator2', players: [], funding: { current: 15000, goal: 20000 }, merch: [{ id: 1, name: 'Slam Dunk Hoodie', price: 79.99, image: 'https://placehold.co/300x300/F59E0B/FFFFFF?text=Hoodie' }], posts: [{ id: 3, text: 'Our new merchandise is now available!', image: 'https://placehold.co/600x400/F59E0B/FFFFFF?text=New+Merch', timestamp: new Date('2025-06-28T15:00:00'), likes: 210, comments: [] }] },
-    { id: 3, name: 'Valley Vipers', sport: 'Baseball', logo: 'https://placehold.co/150x150/86efac/064e3b?text=🐍', tagline: 'Striking out the competition.', description: 'The heart of baseball in the valley.', creatorId: 'creator3', players: [], funding: { current: 4000, goal: 5000 }, merch: [], posts: [{ id: 4, text: 'Tough loss, but we\'ll bounce back stronger. See you at the next game.', image: null, timestamp: new Date('2025-06-28T18:00:00'), likes: 76, comments: [] }] },
-];
+type Club = {
+    id: number;
+    name: string;
+    sport: string;
+    logo: string;
+    tagline: string;
+    description: string;
+    creator_id: string;
+    players: Player[];
+    posts: Post[];
+    merch: Merch[];
+    funding: Funding[];
+};
+
+type Player = { id: number; name: string; position: string; avatar_url: string; };
+type Post = { id: number; content: string; image_url?: string; created_at: string; likes: number; comments: Comment[]; };
+type Comment = { id: number; content: string; user_id: string; created_at: string; };
+type Merch = { id: number; name: string; price: number; image: string; };
+type Funding = { id: number; current: number; goal: number; };
 
 
 // --- MAIN APP COMPONENT ---
 
 export default function App() {
     // Core state for user, page navigation, and data
-    const [currentUser, setCurrentUser] = useState(null);
-    const [page, setPage] = useState('login'); // Determines which view is rendered
-    const [pageContext, setPageContext] = useState({}); // Holds context for the current page (e.g., clubId, postId)
-    const [history, setHistory] = useState([]); // Manages navigation history for the back button
-    const [pendingUser, setPendingUser] = useState(null); // Holds user info during multi-step sign-up
+    const [currentUser, setCurrentUser] = useState<Profile & User | null>(null);
+    const [page, setPage] = useState('login');
+    const [pageContext, setPageContext] = useState({});
+    const [history, setHistory] = useState([]);
+    const [pendingUser, setPendingUser] = useState(null);
 
-    // App's mock data state
-    const [clubs, setClubs] = useState(initialMockClubs);
-    const [users, setUsers] = useState(initialMockUsers);
+    // App's data state
+    const [clubs, setClubs] = useState<Club[]>([]);
+    const [users, setUsers] = useState<Profile[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+
+    // UI state
     const [darkMode, setDarkMode] = useState(false);
 
-    // Effect for toggling dark mode class on the root element
+    // Check for logged-in user on initial load
+    useEffect(() => {
+        const getSession = async () => {
+            setIsLoading(true);
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session?.user) {
+                const { data: userProfile } = await supabase
+                    .from('profiles')
+                    .select('*')
+                    .eq('id', session.user.id)
+                    .single();
+                if (userProfile) {
+                    setCurrentUser({ ...session.user, ...userProfile });
+                    navigateTo(userProfile.role === 'fan' ? 'fanDashboard' : 'creatorDashboard');
+                }
+            }
+            setIsLoading(false);
+        };
+        getSession();
+
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+            if (!session && currentUser) {
+                handleLogout();
+            } else if (session?.user && !currentUser) {
+                 getSession();
+            }
+        });
+
+        return () => subscription.unsubscribe();
+    }, []);
+    
+    // Fetch data when user is logged in
+    useEffect(() => {
+        if(currentUser) {
+            fetchClubs();
+            fetchUsers();
+        }
+    }, [currentUser]);
+
+
     useEffect(() => {
         document.documentElement.classList.toggle('dark', darkMode);
     }, [darkMode]);
@@ -74,57 +114,77 @@ export default function App() {
         }
     };
 
-    // --- Authentication Handlers ---
-    const handleLogin = (email, password) => {
-        const user = users[email];
-        if (user && user.password === password) {
-            setCurrentUser(user);
-            setHistory([]); 
-            navigateTo(user.role === 'fan' ? 'fanDashboard' : 'creatorDashboard');
-            return true;
-        }
-        return false;
+    // --- Data Fetching ---
+    const fetchClubs = async () => {
+        const { data, error } = await supabase.from('clubs').select(`*, players(*), posts(*, comments(*)), merch(*), funding(*)`);
+        if (error) console.error('Error fetching clubs:', error);
+        else setClubs(data || []);
     };
 
-    const initiateSignUp = (name, email, password) => {
-        if (users[email]) {
-            alert("User with this email already exists.");
+    const fetchUsers = async () => {
+        const { data, error } = await supabase.from('profiles').select('*');
+        if (error) console.error('Error fetching users:', error);
+        else setUsers(data || []);
+    };
+
+    // --- Authentication Handlers ---
+    const handleLogin = async (email, password) => {
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) {
+            alert(error.message);
             return false;
         }
-        setPendingUser({ name, email, password });
-        navigateTo('roleChooser');
+        if (data.user) {
+             const { data: userProfile } = await supabase.from('profiles').select('*').eq('id', data.user.id).single();
+             if (userProfile) {
+                setCurrentUser({ ...data.user, ...userProfile });
+                setHistory([]); 
+                navigateTo(userProfile.role === 'fan' ? 'fanDashboard' : 'creatorDashboard');
+             }
+        }
         return true;
     };
 
-    const completeSignUp = (role) => {
+    const initiateSignUp = (name, email, password) => {
+        setPendingUser({ name, email, password });
+        navigateTo('roleChooser');
+    };
+
+    const completeSignUp = async (role) => {
         if (!pendingUser) return;
         const { name, email, password } = pendingUser;
-        const newId = `user_${Date.now()}`;
-        const newUser = { id: newId, name, email, password, role, avatar: `https://placehold.co/100x100/CCCCCC/FFFFFF?text=${name.charAt(0)}`, bio: '', followedClubs: [], managedClubs: [] };
         
-        const updatedUsers = {...users, [email]: newUser};
-        setUsers(updatedUsers);
-        setCurrentUser(newUser);
-        setPendingUser(null);
-        setHistory([]);
-        navigateTo(role === 'fan' ? 'fanDashboard' : 'creatorDashboard');
-    };
+        const { data: authData, error: authError } = await supabase.auth.signUp({
+            email,
+            password,
+            options: {
+                data: {
+                    full_name: name,
+                    role: role,
+                    avatar_url: `https://placehold.co/100x100/CCCCCC/FFFFFF?text=${name.charAt(0)}`
+                }
+            }
+        });
 
-    const handleGoogleSignIn = () => {
-        const googleUserEmail = 'google.user@example.com';
-        const existingUser = users[googleUserEmail];
-
-        if (existingUser) {
-            setCurrentUser(existingUser);
-            setHistory([]);
-            navigateTo(existingUser.role === 'fan' ? 'fanDashboard' : 'creatorDashboard');
-        } else {
-            setPendingUser({ name: 'Googler', email: googleUserEmail, password: 'google_password' });
-            navigateTo('roleChooser');
+        if (authError) {
+            alert(authError.message);
+            return;
+        }
+        
+        if (authData.user) {
+            alert("Sign-up successful! Please check your email to confirm your account.");
+            setPendingUser(null);
+            navigateTo('login');
         }
     };
+
+    const handleGoogleSignIn = async () => {
+        const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
+        if (error) alert(error.message);
+    };
     
-    const handleLogout = () => {
+    const handleLogout = async () => {
+        await supabase.auth.signOut();
         setCurrentUser(null);
         setPage('login');
         setPageContext({});
@@ -132,80 +192,92 @@ export default function App() {
     }
     
     // --- Data Mutation Handlers ---
-    const handleUpdateUser = (updatedUser) => {
-        setCurrentUser(updatedUser);
-        setUsers({...users, [updatedUser.email]: updatedUser});
+    const handleUpdateUser = async (updatedProfile) => {
+        const { data, error } = await supabase
+            .from('profiles')
+            .update({ full_name: updatedProfile.full_name, bio: updatedProfile.bio, avatar_url: updatedProfile.avatar_url })
+            .eq('id', currentUser.id)
+            .select()
+            .single();
+
+        if (error) alert(error.message);
+        else setCurrentUser({ ...currentUser, ...data });
     }
 
-    const handleToggleFollow = (clubId) => {
-        const isFollowing = currentUser.followedClubs.includes(clubId);
+    const handleToggleFollow = async (clubId) => {
+        const isFollowing = currentUser.followed_clubs?.includes(clubId);
         const updatedFollowedClubs = isFollowing
-            ? currentUser.followedClubs.filter(id => id !== clubId)
-            : [...currentUser.followedClubs, clubId];
+            ? currentUser.followed_clubs.filter(id => id !== clubId)
+            : [...(currentUser.followed_clubs || []), clubId];
         
-        const updatedUser = { ...currentUser, followedClubs: updatedFollowedClubs };
-        handleUpdateUser(updatedUser);
+        const { data, error } = await supabase
+            .from('profiles')
+            .update({ followed_clubs: updatedFollowedClubs })
+            .eq('id', currentUser.id)
+            .select()
+            .single();
+        
+        if(error) alert(error.message);
+        else setCurrentUser({ ...currentUser, ...data });
     };
 
-    const handleAddPost = (clubId, newPost) => setClubs(clubs.map(c => c.id === clubId ? { ...c, posts: [{...newPost, id: Date.now(), timestamp: new Date(), likes: 0, comments: [] }, ...c.posts] } : c));
-    
-    const handleAddComment = (clubId, postId, commentText) => {
-        setClubs(clubs.map(club => {
-            if (club.id === clubId) {
-                const updatedPosts = club.posts.map(post => {
-                    if (post.id === postId) {
-                        const newComment = { id: Date.now(), userId: currentUser.id, text: commentText };
-                        return { ...post, comments: [...post.comments, newComment] };
-                    }
-                    return post;
-                });
-                return { ...club, posts: updatedPosts };
-            }
-            return club;
-        }));
+    const handleAddPost = async (clubId, newPost) => {
+        const { error } = await supabase
+            .from('posts')
+            .insert([{ club_id: clubId, content: newPost.text, image_url: newPost.image, author_id: currentUser.id }]);
+        
+        if(error) alert(error.message);
+        else fetchClubs();
     };
     
-    const handleAddPlayer = (clubId, newPlayer) => {
-        setClubs(clubs.map(club => {
-            if (club.id === clubId) {
-                return { ...club, players: [...club.players, { ...newPlayer, id: Date.now() }] };
-            }
-            return club;
-        }));
-    };
-
-    const handleUpdateClub = (updatedClub) => {
-        setClubs(clubs.map(c => (c.id === updatedClub.id ? updatedClub : c)));
-    };
-
-    const handleCreateClub = (newClubData) => {
-        const newClubId = Date.now();
-        const newClub = {
-            id: newClubId,
-            creatorId: currentUser.id,
-            players: [],
-            funding: { current: 0, goal: 10000 },
-            merch: [],
-            posts: [],
-            ...newClubData
-        };
+    const handleAddComment = async (postId, commentText) => {
+        const { error } = await supabase
+            .from('comments')
+            .insert([{ post_id: postId, user_id: currentUser.id, content: commentText }]);
         
-        setClubs([...clubs, newClub]);
+        if(error) alert(error.message);
+        else fetchClubs();
+    };
+    
+    const handleAddPlayer = async (clubId, newPlayer) => {
+        const { error } = await supabase
+            .from('players')
+            .insert([{ club_id: clubId, ...newPlayer }]);
 
-        const updatedUser = {
-            ...currentUser,
-            managedClubs: [...currentUser.managedClubs, newClubId]
-        };
-        setCurrentUser(updatedUser);
-        setUsers({...users, [currentUser.email]: updatedUser});
-
-        navigateTo('creatorDashboard');
+        if(error) alert(error.message);
+        else fetchClubs();
     };
 
-    const allUsers = Object.values(users);
+    const handleUpdateClub = async (updatedClub) => {
+        const { error } = await supabase
+            .from('clubs')
+            .update(updatedClub)
+            .eq('id', updatedClub.id);
+        
+        if(error) alert(error.message);
+        else fetchClubs();
+    };
+
+    const handleCreateClub = async (newClubData) => {
+        const { data, error } = await supabase
+            .from('clubs')
+            .insert([{ ...newClubData, creator_id: currentUser.id }])
+            .select()
+            .single();
+
+        if(error) alert(error.message);
+        else {
+            fetchClubs();
+            navigateTo('creatorDashboard');
+        }
+    };
 
     // --- Page Router ---
     const renderPage = () => {
+        if (isLoading) {
+            return <div className="flex justify-center items-center h-screen"><div className="loader"></div></div>;
+        }
+
         if (!currentUser) {
             switch (page) {
                 case 'signup': return <SignUpPage onInitiateSignUp={initiateSignUp} navigateTo={navigateTo} onGoogleSignIn={handleGoogleSignIn} />;
@@ -219,14 +291,14 @@ export default function App() {
         const selectedPost = selectedClub?.posts.find(p => p.id === postId);
 
         switch (page) {
-            case 'fanDashboard': return <FanDashboard currentUser={currentUser} clubs={clubs} navigateTo={navigateTo} users={allUsers} onAddComment={handleAddComment} />;
+            case 'fanDashboard': return <FanDashboard currentUser={currentUser} clubs={clubs} navigateTo={navigateTo} users={users} onAddComment={handleAddComment} />;
             case 'creatorDashboard': return <CreatorDashboard currentUser={currentUser} clubs={clubs} navigateTo={navigateTo} />;
             case 'createClub': return <CreateClubPage onCreateClub={handleCreateClub} navigateTo={navigateTo} />;
             case 'clubManagement': return <ClubManagementPage club={selectedClub} onAddPost={handleAddPost} onAddPlayer={handleAddPlayer} onUpdateClub={handleUpdateClub}/>;
-            case 'clubPublicView': return <ClubPublicView club={selectedClub} navigateTo={navigateTo} users={allUsers} onAddComment={handleAddComment} currentUser={currentUser} onToggleFollow={handleToggleFollow} />;
+            case 'clubPublicView': return <ClubPublicView club={selectedClub} navigateTo={navigateTo} users={users} onAddComment={handleAddComment} currentUser={currentUser} onToggleFollow={handleToggleFollow} />;
             case 'fanProfile': return <FanProfilePage user={currentUser} onUpdateUser={handleUpdateUser} />;
-            case 'postDetail': return <PostDetailView post={selectedPost} club={selectedClub} navigateBack={navigateBack} users={allUsers} onAddComment={handleAddComment} currentUser={currentUser} />;
-            default: return <LoginPage onLogin={handleLogin} navigateTo={navigateTo} />;
+            case 'postDetail': return <PostDetailView post={selectedPost} club={selectedClub} navigateBack={navigateBack} users={users} onAddComment={onAddComment} currentUser={currentUser} />;
+            default: return <LoginPage onLogin={handleLogin} navigateTo={navigateTo} onGoogleSignIn={handleGoogleSignIn} />;
         }
     };
 
@@ -242,6 +314,7 @@ export default function App() {
 }
 
 // --- CORE COMPONENTS ---
+// ... (The rest of the components remain largely the same, but now receive real data)
 
 const Header = ({ user, onLogout, navigateTo, darkMode, setDarkMode }) => {
     const goHome = () => navigateTo(user.role === 'fan' ? 'fanDashboard' : 'creatorDashboard');
@@ -250,7 +323,7 @@ const Header = ({ user, onLogout, navigateTo, darkMode, setDarkMode }) => {
             <nav className="container mx-auto px-4 py-4 flex justify-between items-center">
                 <div className="flex items-center space-x-2 cursor-pointer" onClick={goHome}><Shield className="text-blue-500" size={28} /><span className="text-xl font-bold text-gray-800 dark:text-white">ClubConnect</span></div>
                 <div className="flex items-center space-x-4">
-                    <span className="hidden sm:block font-semibold">Welcome, {user.name}!</span>
+                    <span className="hidden sm:block font-semibold">Welcome, {user.full_name || user.email}!</span>
                     {user.role === 'fan' && <button onClick={() => navigateTo('fanProfile')} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"><UserCircle/></button>}
                     <ThemeToggle darkMode={darkMode} setDarkMode={setDarkMode} />
                     <button onClick={onLogout} title="Logout" className="bg-red-500 text-white p-2 rounded-full hover:bg-red-600 transition-colors shadow"><LogOut size={20}/></button>
@@ -283,10 +356,11 @@ const LoginPage = ({ onLogin, navigateTo, onGoogleSignIn }) => {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
-    const handleSubmit = (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
-        if (!onLogin(email, password)) {
+        const success = await onLogin(email, password);
+        if (!success) {
             setError('Invalid email or password.');
         }
     };
@@ -342,10 +416,11 @@ const RoleChooserPage = ({ onCompleteSignUp }) => (
 
 
 // --- FAN EXPERIENCE ---
-
+// The rest of the components remain largely the same but will now receive live data
+// from the main App component. Small adjustments are made to access nested data correctly.
 const FanDashboard = ({ currentUser, clubs, navigateTo, users, onAddComment }) => {
     const [searchTerm, setSearchTerm] = useState('');
-    const followedClubsPosts = clubs.filter(club => currentUser.followedClubs.includes(club.id)).flatMap(club => club.posts.map(post => ({ ...post, club }))).sort((a, b) => b.timestamp - a.timestamp);
+    const followedClubsPosts = clubs.filter(club => currentUser.followed_clubs?.includes(club.id)).flatMap(club => (club.posts || []).map(post => ({ ...post, club }))).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     const filteredClubs = clubs.filter(club => club.name.toLowerCase().includes(searchTerm.toLowerCase()));
 
     return (
@@ -354,14 +429,14 @@ const FanDashboard = ({ currentUser, clubs, navigateTo, users, onAddComment }) =
                  <h1 className="text-3xl font-bold">Fan Dashboard</h1>
                  <div className="relative md:w-1/3"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} /><input type="text" placeholder="Search for any club..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600"/></div>
             </div>
-            {searchTerm ? (<div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg"><h2 className="text-2xl font-bold mb-4">Search Results</h2><div className="space-y-4">{filteredClubs.length > 0 ? filteredClubs.map(club => (<div key={club.id} onClick={() => navigateTo('clubPublicView', { clubId: club.id })} className="flex items-center space-x-4 p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"><img src={club.logo} alt={club.name} className="w-12 h-12 rounded-lg object-cover" /><div><p className="font-bold">{club.name}</p><p className="text-sm text-gray-500">{club.sport}</p></div></div>)) : <p>No clubs found.</p>}</div></div>) : (<div className="grid grid-cols-1 lg:grid-cols-3 gap-8"><div className="lg:col-span-2 space-y-6"><h2 className="text-2xl font-bold">Your Feed</h2>{followedClubsPosts.length > 0 ? (followedClubsPosts.map(post => <PostCard key={`${post.id}-${post.likes}`} post={post} club={post.club} navigateTo={navigateTo} users={users} onAddComment={onAddComment} currentUser={currentUser}/>)) : (<div className="bg-white dark:bg-gray-800 p-8 rounded-2xl text-center"><h2 className="text-xl font-semibold">Your feed is empty!</h2><p className="mt-2">Follow clubs to see their updates.</p></div>)}</div><aside className="lg:col-span-1 space-y-6"><div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg"><h2 className="text-2xl font-bold mb-4">Discover Clubs</h2><div className="space-y-4">{clubs.filter(c => !currentUser.followedClubs.includes(c.id)).map(club => (<div key={club.id} onClick={() => navigateTo('clubPublicView', { clubId: club.id })} className="flex items-center space-x-4 p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"><img src={club.logo} alt={club.name} className="w-12 h-12 rounded-lg object-cover" /><div><p className="font-bold">{club.name}</p><p className="text-sm text-gray-500">{club.sport}</p></div></div>))}</div></div></aside></div>)}
+            {searchTerm ? (<div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg"><h2 className="text-2xl font-bold mb-4">Search Results</h2><div className="space-y-4">{filteredClubs.length > 0 ? filteredClubs.map(club => (<div key={club.id} onClick={() => navigateTo('clubPublicView', { clubId: club.id })} className="flex items-center space-x-4 p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"><img src={club.logo} alt={club.name} className="w-12 h-12 rounded-lg object-cover" /><div><p className="font-bold">{club.name}</p><p className="text-sm text-gray-500">{club.sport}</p></div></div>)) : <p>No clubs found.</p>}</div></div>) : (<div className="grid grid-cols-1 lg:grid-cols-3 gap-8"><div className="lg:col-span-2 space-y-6"><h2 className="text-2xl font-bold">Your Feed</h2>{followedClubsPosts.length > 0 ? (followedClubsPosts.map(post => <PostCard key={`${post.id}`} post={post} club={post.club} navigateTo={navigateTo} users={users} onAddComment={onAddComment} currentUser={currentUser}/>)) : (<div className="bg-white dark:bg-gray-800 p-8 rounded-2xl text-center"><h2 className="text-xl font-semibold">Your feed is empty!</h2><p className="mt-2">Follow clubs to see their updates.</p></div>)}</div><aside className="lg:col-span-1 space-y-6"><div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg"><h2 className="text-2xl font-bold mb-4">Discover Clubs</h2><div className="space-y-4">{clubs.filter(c => !currentUser.followed_clubs?.includes(c.id)).map(club => (<div key={club.id} onClick={() => navigateTo('clubPublicView', { clubId: club.id })} className="flex items-center space-x-4 p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"><img src={club.logo} alt={club.name} className="w-12 h-12 rounded-lg object-cover" /><div><p className="font-bold">{club.name}</p><p className="text-sm text-gray-500">{club.sport}</p></div></div>))}</div></div></aside></div>)}
         </div>
     );
 };
 
 const PostCard = ({ post, club, navigateTo, users, onAddComment, currentUser, isDetailView = false }) => {
     const [isLiked, setIsLiked] = useState(false);
-    const [likeCount, setLikeCount] = useState(post.likes);
+    const [likeCount, setLikeCount] = useState(post.likes || 0);
     
     const handleLike = () => { setIsLiked(!isLiked); setLikeCount(isLiked ? likeCount - 1 : likeCount + 1); };
     
@@ -377,16 +452,16 @@ const PostCard = ({ post, club, navigateTo, users, onAddComment, currentUser, is
         <div className="p-6">
             <div className="flex items-center mb-4 group" onClick={(e) => { e.stopPropagation(); navigateTo('clubPublicView', { clubId: club.id }); }}>
                 <img src={club.logo} alt={club.name} className="w-12 h-12 rounded-lg object-cover mr-4" />
-                <div><h3 className="font-bold text-lg group-hover:underline">{club.name}</h3><p className="text-sm text-gray-500">{post.timestamp.toLocaleString()}</p></div>
+                <div><h3 className="font-bold text-lg group-hover:underline">{club.name}</h3><p className="text-sm text-gray-500">{new Date(post.created_at).toLocaleString()}</p></div>
             </div>
-            <p className="text-gray-700 dark:text-gray-300 mb-4">{post.text}</p>
+            <p className="text-gray-700 dark:text-gray-300 mb-4">{post.content}</p>
         </div>
-        {post.image && <img src={post.image} alt="Post content" className="w-full h-auto object-cover"/>}
+        {post.image_url && <img src={post.image_url} alt="Post content" className="w-full h-auto object-cover"/>}
         <div className="p-4">
             <div className="flex justify-between items-center text-gray-500 dark:text-gray-400">
                 <div className="flex space-x-5">
                     <button onClick={handleLike} className={`flex items-center space-x-2 hover:text-pink-500 ${isLiked ? 'text-pink-500' : ''}`}><Heart fill={isLiked ? 'currentColor' : 'none'} size={20} /><span>{likeCount}</span></button>
-                    <button onClick={() => !isDetailView && navigateTo('postDetail', { postId: post.id, clubId: club.id })} className="flex items-center space-x-2 hover:text-blue-500"><MessageCircle size={20} /><span>{post.comments.length}</span></button>
+                    <button onClick={() => !isDetailView && navigateTo('postDetail', { postId: post.id, clubId: club.id })} className="flex items-center space-x-2 hover:text-blue-500"><MessageCircle size={20} /><span>{post.comments?.length || 0}</span></button>
                     <button className="flex items-center space-x-2 hover:text-green-500"><Share2 size={20} /></button>
                 </div>
                 <button className="flex items-center space-x-2 hover:text-yellow-500"><Bookmark size={20} /></button>
@@ -398,16 +473,16 @@ const PostCard = ({ post, club, navigateTo, users, onAddComment, currentUser, is
 
 const CommentSection = ({ post, club, users, onAddComment, currentUser }) => {
     const [commentText, setCommentText] = useState('');
-    const handleCommentSubmit = (e) => { e.preventDefault(); if(commentText.trim()){ onAddComment(club.id, post.id, commentText); setCommentText(''); }};
+    const handleCommentSubmit = (e) => { e.preventDefault(); if(commentText.trim()){ onAddComment(post.id, commentText); setCommentText(''); }};
 
     return (
         <div className="mt-4 space-y-3">
             <h3 className="text-lg font-bold border-t pt-4 dark:border-gray-700">Replies</h3>
-            {post.comments.map(comment => {
-                const commenter = users.find(u => u.id === comment.userId);
-                return (<div key={comment.id} className="flex items-start space-x-3 text-sm"><img src={commenter?.avatar} alt={commenter?.name} className="w-8 h-8 rounded-full"/><div className="bg-gray-100 dark:bg-gray-700 p-2 rounded-lg flex-1"><span className="font-semibold">{commenter?.name || 'User'}</span>: {comment.text}</div></div>)})}
+            {(post.comments || []).map(comment => {
+                const commenter = users.find(u => u.id === comment.user_id);
+                return (<div key={comment.id} className="flex items-start space-x-3 text-sm"><img src={commenter?.avatar_url} alt={commenter?.full_name} className="w-8 h-8 rounded-full"/><div className="bg-gray-100 dark:bg-gray-700 p-2 rounded-lg flex-1"><span className="font-semibold">{commenter?.full_name || 'User'}</span>: {comment.content}</div></div>)})}
             <form onSubmit={handleCommentSubmit} className="flex items-center space-x-2 pt-2">
-                <img src={currentUser.avatar} alt="your avatar" className="w-8 h-8 rounded-full"/>
+                <img src={currentUser.avatar_url} alt="your avatar" className="w-8 h-8 rounded-full"/>
                 <input type="text" value={commentText} onChange={e=>setCommentText(e.target.value)} placeholder="Write a reply..." className="w-full p-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 text-sm"/>
             </form>
         </div>
@@ -428,24 +503,25 @@ const PostDetailView = ({ post, club, navigateBack, users, onAddComment, current
 
 const ClubPublicView = ({ club, navigateTo, users, onAddComment, currentUser, onToggleFollow }) => {
     const [activeTab, setActiveTab] = useState('posts');
-    const isFollowing = currentUser.followedClubs.includes(club.id);
+    if (!club) return <div className="loader"></div>;
+    const isFollowing = currentUser.followed_clubs?.includes(club.id);
     const tabs = [{ id: 'posts', label: 'Posts', icon: Newspaper }, { id: 'team', label: 'Team', icon: Users }, { id: 'funding', label: 'Funding', icon: DollarSign }, { id: 'merch', label: 'Merch', icon: Shirt }];
     
     return (<div className="space-y-8"><button onClick={() => navigateTo('fanDashboard')} className="flex items-center space-x-2 text-blue-500 hover:underline"><ArrowLeft size={20} /><span>Back to Dashboard</span></button><div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8"><header className="flex flex-col md:flex-row items-center gap-6 text-center md:text-left"><img src={club.logo} alt={club.name} className="w-32 h-32 rounded-2xl object-cover shadow-lg" /><div><h1 className="text-4xl font-extrabold text-gray-900 dark:text-white">{club.name}</h1><p className="text-xl text-gray-500 mt-1">{club.description}</p></div>
     <button onClick={() => onToggleFollow(club.id)} className={`mt-4 md:mt-0 md:ml-auto px-6 py-3 rounded-lg font-semibold transition-colors shadow-lg flex items-center gap-2 ${isFollowing ? 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300' : 'bg-blue-500 text-white hover:bg-blue-600'}`}>
         {isFollowing ? <><Check size={20}/> Following</> : 'Follow Club'}
     </button>
-    </header></div><div><div className="border-b border-gray-200 dark:border-gray-700"><nav className="-mb-px flex space-x-6 overflow-x-auto">{tabs.map(tab => (<button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`${ activeTab === tab.id ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:border-gray-300' } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center space-x-2`}><tab.icon size={16} /><span>{tab.label}</span></button>))}</nav></div><div className="mt-8">{activeTab === 'posts' && <div className="space-y-6">{club.posts.map(post => <PostCard key={post.id} post={post} club={club} navigateTo={navigateTo} users={users} onAddComment={onAddComment} currentUser={currentUser}/>)}</div>}{activeTab === 'team' && <PlayerRoster club={club} isReadOnly={true} />}{activeTab === 'funding' && <FundingSection funding={club.funding} />}{activeTab === 'merch' && <MerchSection merch={club.merch} />}</div></div></div>);
+    </header></div><div><div className="border-b border-gray-200 dark:border-gray-700"><nav className="-mb-px flex space-x-6 overflow-x-auto">{tabs.map(tab => (<button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`${ activeTab === tab.id ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:border-gray-300' } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center space-x-2`}><tab.icon size={16} /><span>{tab.label}</span></button>))}</nav></div><div className="mt-8">{activeTab === 'posts' && <div className="space-y-6">{(club.posts || []).map(post => <PostCard key={post.id} post={post} club={club} navigateTo={navigateTo} users={users} onAddComment={onAddComment} currentUser={currentUser}/>)}</div>}{activeTab === 'team' && <PlayerRoster club={club} isReadOnly={true} />}{activeTab === 'funding' && <FundingSection funding={club.funding?.[0]} />}{activeTab === 'merch' && <MerchSection merch={club.merch} />}</div></div></div>);
 };
 
 const FanProfilePage = ({ user, onUpdateUser }) => {
     const [isEditing, setIsEditing] = useState(false);
-    const [name, setName] = useState(user.name);
+    const [name, setName] = useState(user.full_name);
     const [bio, setBio] = useState(user.bio);
-    const [avatar, setAvatar] = useState(user.avatar);
+    const [avatar, setAvatar] = useState(user.avatar_url);
     
     const handleSave = () => {
-        onUpdateUser({...user, name, bio, avatar});
+        onUpdateUser({ ...user, full_name: name, bio, avatar_url: avatar });
         setIsEditing(false);
     }
     
@@ -486,8 +562,8 @@ const FanProfilePage = ({ user, onUpdateUser }) => {
 // --- CREATOR EXPERIENCE ---
 
 const CreatorDashboard = ({ currentUser, clubs, navigateTo }) => {
-    const managedClubs = clubs.filter(club => currentUser.managedClubs.includes(club.id));
-    return (<div className="space-y-8"><h1 className="text-3xl font-bold">Creator Dashboard</h1><div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg"><h2 className="text-2xl font-bold mb-4">Your Clubs</h2><div className="space-y-4">{managedClubs.length > 0 ? managedClubs.map(club => (<div key={club.id} className="flex items-center justify-between p-4 rounded-lg bg-gray-50 dark:bg-gray-700"><div className="flex items-center space-x-4"><img src={club.logo} alt={club.name} className="w-12 h-12 rounded-lg object-cover" /><div><p className="font-bold text-lg">{club.name}</p><p className="text-sm text-gray-500">{club.players.length} Players · {club.merch.length} Merch</p></div></div><button onClick={() => navigateTo('clubManagement', { clubId: club.id })} className="bg-blue-500 text-white px-6 py-2 rounded-lg hover:bg-blue-600 shadow">Manage</button></div>)) : <p className="text-center text-gray-500 py-4">You haven't created any clubs yet.</p>}</div><button onClick={() => navigateTo('createClub')} className="mt-6 w-full flex items-center justify-center space-x-2 bg-green-500 text-white px-4 py-3 rounded-lg hover:bg-green-600 shadow"><Plus size={20} /><span>Create a New Club</span></button></div></div>);
+    const managedClubs = clubs.filter(club => club.creator_id === currentUser.id);
+    return (<div className="space-y-8"><h1 className="text-3xl font-bold">Creator Dashboard</h1><div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg"><h2 className="text-2xl font-bold mb-4">Your Clubs</h2><div className="space-y-4">{managedClubs.length > 0 ? managedClubs.map(club => (<div key={club.id} className="flex items-center justify-between p-4 rounded-lg bg-gray-50 dark:bg-gray-700"><div className="flex items-center space-x-4"><img src={club.logo} alt={club.name} className="w-12 h-12 rounded-lg object-cover" /><div><p className="font-bold text-lg">{club.name}</p></div></div><button onClick={() => navigateTo('clubManagement', { clubId: club.id })} className="bg-blue-500 text-white px-6 py-2 rounded-lg hover:bg-blue-600 shadow">Manage</button></div>)) : <p className="text-center text-gray-500 py-4">You haven't created any clubs yet.</p>}</div><button onClick={() => navigateTo('createClub')} className="mt-6 w-full flex items-center justify-center space-x-2 bg-green-500 text-white px-4 py-3 rounded-lg hover:bg-green-600 shadow"><Plus size={20} /><span>Create a New Club</span></button></div></div>);
 };
 
 const CreateClubPage = ({ onCreateClub, navigateTo }) => {
@@ -505,7 +581,7 @@ const CreateClubPage = ({ onCreateClub, navigateTo }) => {
         if (file) {
             const reader = new FileReader();
             reader.onload = (event) => {
-                setLogo(event.target.result);
+                setLogo(event.target.result as string);
             };
             reader.readAsDataURL(file);
         }
@@ -552,7 +628,8 @@ const CreateClubPage = ({ onCreateClub, navigateTo }) => {
 const ClubManagementPage = ({ club, onAddPost, onAddPlayer, onUpdateClub }) => {
     const [activeTab, setActiveTab] = useState('posts');
     const tabs = [{ id: 'posts', label: 'Posts', icon: Newspaper }, { id: 'team', label: 'Team', icon: Users }, { id: 'merch', label: 'Merch', icon: Shirt }, { id: 'funding', label: 'Funding', icon: DollarSign }, { id: 'settings', label: 'Settings', icon: Settings }];
-    return (<div className="space-y-8"><header className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 flex items-center justify-between"><div className="flex items-center gap-6"><img src={club.logo} alt={club.name} className="w-32 h-32 rounded-2xl object-cover shadow-lg" /><div><h1 className="text-4xl font-extrabold">{club.name}</h1><p className="text-xl text-gray-500 mt-1">Club Management</p></div></div></header><div><div className="border-b border-gray-200 dark:border-gray-700"><nav className="-mb-px flex space-x-6 overflow-x-auto">{tabs.map(tab => (<button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`${ activeTab === tab.id ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:border-gray-300' } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center space-x-2`}><tab.icon size={16} /><span>{tab.label}</span></button>))}</nav></div><div className="mt-8">{activeTab === 'posts' && <PostsManager club={club} onAddPost={onAddPost} />}{activeTab === 'team' && <PlayerRoster club={club} onAddPlayer={onAddPlayer} />}{activeTab === 'merch' && <MerchManager />}{activeTab === 'funding' && <FundingSection funding={club.funding} isReadOnly={false} />}{activeTab === 'settings' && <ClubSettings club={club} onUpdateClub={onUpdateClub} />}</div></div></div>);
+    if (!club) return <div className="loader"></div>;
+    return (<div className="space-y-8"><header className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 flex items-center justify-between"><div className="flex items-center gap-6"><img src={club.logo} alt={club.name} className="w-32 h-32 rounded-2xl object-cover shadow-lg" /><div><h1 className="text-4xl font-extrabold">{club.name}</h1><p className="text-xl text-gray-500 mt-1">Club Management</p></div></div></header><div><div className="border-b border-gray-200 dark:border-gray-700"><nav className="-mb-px flex space-x-6 overflow-x-auto">{tabs.map(tab => (<button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`${ activeTab === tab.id ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:border-gray-300' } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center space-x-2`}><tab.icon size={16} /><span>{tab.label}</span></button>))}</nav></div><div className="mt-8">{activeTab === 'posts' && <PostsManager club={club} onAddPost={onAddPost} />}{activeTab === 'team' && <PlayerRoster club={club} onAddPlayer={onAddPlayer} />}{activeTab === 'merch' && <MerchManager />}{activeTab === 'funding' && <FundingSection funding={club.funding?.[0]} isReadOnly={false} />}{activeTab === 'settings' && <ClubSettings club={club} onUpdateClub={onUpdateClub} />}</div></div></div>);
 };
 
 const PostsManager = ({ club, onAddPost }) => {
@@ -573,12 +650,12 @@ const PostsManager = ({ club, onAddPost }) => {
         }
     };
     
-    return (<div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-lg space-y-6"><h3 className="text-2xl font-bold">Manage Posts</h3><form onSubmit={handleSubmit} className="space-y-4"><textarea value={postText} onChange={e => setPostText(e.target.value)} className="w-full p-2 border rounded-lg dark:bg-gray-700" rows="4" placeholder="What's new with the team?"></textarea>{postImage && <div className="relative"><img src={postImage} alt="preview" className="rounded-lg w-full"/><button type="button" onClick={() => setPostImage(null)} className="absolute top-2 right-2 bg-black bg-opacity-50 text-white rounded-full p-1 leading-none">&times;</button></div>}<div className="flex justify-between items-center"><button type="button" onClick={handleImageButtonClick} className="flex items-center space-x-2 text-blue-500"><Camera size={20}/><span>Add Image</span></button><input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept="image/*" /><button type="submit" className="bg-blue-500 text-white px-6 py-2 rounded-lg hover:bg-blue-600 shadow">Post Update</button></div></form><div className="space-y-4"><h4 className="font-bold text-lg">Recent Posts</h4>{club.posts.map(post => <div key={post.id} className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">{post.text}</div>)}</div></div>);
+    return (<div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-lg space-y-6"><h3 className="text-2xl font-bold">Manage Posts</h3><form onSubmit={handleSubmit} className="space-y-4"><textarea value={postText} onChange={e => setPostText(e.target.value)} className="w-full p-2 border rounded-lg dark:bg-gray-700" rows="4" placeholder="What's new with the team?"></textarea>{postImage && <div className="relative"><img src={postImage} alt="preview" className="rounded-lg w-full"/><button type="button" onClick={() => setPostImage(null)} className="absolute top-2 right-2 bg-black bg-opacity-50 text-white rounded-full p-1 leading-none">&times;</button></div>}<div className="flex justify-between items-center"><button type="button" onClick={handleImageButtonClick} className="flex items-center space-x-2 text-blue-500"><Camera size={20}/><span>Add Image</span></button><input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept="image/*" /><button type="submit" className="bg-blue-500 text-white px-6 py-2 rounded-lg hover:bg-blue-600 shadow">Post Update</button></div></form><div className="space-y-4"><h4 className="font-bold text-lg">Recent Posts</h4>{(club.posts || []).map(post => <div key={post.id} className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">{post.content}</div>)}</div></div>);
 };
 
 const PlayerRoster = ({ club, onAddPlayer, isReadOnly = false }) => {
     const [isAdding, setIsAdding] = useState(false);
-    return (<div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-lg"><div className="flex justify-between items-center mb-6"><h3 className="text-2xl font-bold">Team Roster</h3>{!isReadOnly && <button onClick={() => setIsAdding(!isAdding)} className="flex items-center space-x-2 bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-colors shadow"><UserPlus size={20} /><span>{isAdding ? 'Cancel' : 'Add Player'}</span></button>}</div>{isAdding && <AddPlayerForm clubId={club.id} onAddPlayer={onAddPlayer} onDone={() => setIsAdding(false)} /> }<div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">{club.players.length > 0 ? club.players.map(player => (<div key={player.id} className="text-center bg-gray-50 dark:bg-gray-700 p-4 rounded-xl shadow-md"><img src={player.avatar} alt={player.name} className="w-24 h-24 rounded-full mx-auto mb-3 border-4 border-white dark:border-gray-600" /><p className="font-bold text-lg">{player.name}</p><p className="text-blue-500 font-semibold">{player.position}</p></div>)) : <p>No players on the roster.</p>}</div></div>);
+    return (<div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-lg"><div className="flex justify-between items-center mb-6"><h3 className="text-2xl font-bold">Team Roster</h3>{!isReadOnly && <button onClick={() => setIsAdding(!isAdding)} className="flex items-center space-x-2 bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-colors shadow"><UserPlus size={20} /><span>{isAdding ? 'Cancel' : 'Add Player'}</span></button>}</div>{isAdding && <AddPlayerForm clubId={club.id} onAddPlayer={onAddPlayer} onDone={() => setIsAdding(false)} /> }<div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">{(club.players || []).length > 0 ? club.players.map(player => (<div key={player.id} className="text-center bg-gray-50 dark:bg-gray-700 p-4 rounded-xl shadow-md"><img src={player.avatar_url} alt={player.name} className="w-24 h-24 rounded-full mx-auto mb-3 border-4 border-white dark:border-gray-600" /><p className="font-bold text-lg">{player.name}</p><p className="text-blue-500 font-semibold">{player.position}</p></div>)) : <p>No players on the roster.</p>}</div></div>);
 };
 
 const AddPlayerForm = ({ clubId, onAddPlayer, onDone }) => {
@@ -592,11 +669,11 @@ const AddPlayerForm = ({ clubId, onAddPlayer, onDone }) => {
         const file = e.target.files[0];
         if (file) {
             const reader = new FileReader();
-            reader.onload = (event) => setAvatar(event.target.result);
+            reader.onload = (event) => setAvatar(event.target.result as string);
             reader.readAsDataURL(file);
         }
     };
-    const handleSubmit = (e) => { e.preventDefault(); if (!name || !position) return; onAddPlayer(clubId, { name, position, avatar: avatar || `https://placehold.co/100x100/CCCCCC/FFFFFF?text=${name.charAt(0)}` }); onDone(); };
+    const handleSubmit = (e) => { e.preventDefault(); if (!name || !position) return; onAddPlayer(clubId, { name, position, avatar_url: avatar || `https://placehold.co/100x100/CCCCCC/FFFFFF?text=${name.charAt(0)}` }); onDone(); };
     
     return (
     <form onSubmit={handleSubmit} className="bg-gray-100 dark:bg-gray-900 p-6 rounded-lg mb-8 border border-gray-200 dark:border-gray-700 space-y-4">
@@ -627,13 +704,13 @@ const ClubSettings = ({ club, onUpdateClub }) => {
     const [logo, setLogo] = useState(club.logo);
     const fileInputRef = useRef(null);
 
-    const handleSave = () => { onUpdateClub({...club, name, tagline, description, logo}); alert('Settings Saved!'); }
+    const handleSave = () => { onUpdateClub({ id: club.id, name, tagline, description, logo }); alert('Settings Saved!'); }
     const handleLogoClick = () => fileInputRef.current.click();
     const handleFileChange = (e) => {
         const file = e.target.files[0];
         if (file) {
             const reader = new FileReader();
-            reader.onload = (event) => setLogo(event.target.result);
+            reader.onload = (event) => setLogo(event.target.result as string);
             reader.readAsDataURL(file);
         }
     };
@@ -644,7 +721,6 @@ const ClubSettings = ({ club, onUpdateClub }) => {
 }
 
 const MerchManager = () => (<div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-lg">Merch management interface coming soon...</div>);
-const FundingSection = ({ funding, isReadOnly = true }) => { const percentage = (funding.current / funding.goal) * 100; return (<div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-lg"><h3 className="text-2xl font-bold mb-2">Team Funding Goal</h3><p className="text-gray-600 dark:text-gray-400 mb-6">Raising funds for new equipment!</p><div className="space-y-4"><div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-4"><div className="bg-green-500 h-4 rounded-full" style={{ width: `${percentage}%` }}></div></div><div className="flex justify-between text-sm font-medium"><span>${funding.current.toLocaleString()} Raised</span><span>${funding.goal.toLocaleString()} Goal</span></div><button className="w-full bg-green-500 text-white px-6 py-3 rounded-lg font-semibold hover:bg-green-600 shadow-lg text-lg">{isReadOnly ? 'Support Team' : 'Manage Funding'}</button></div></div>);};
-const MerchSection = ({ merch }) => (<div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-lg"><h3 className="text-2xl font-bold mb-6">Official Merchandise</h3><div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-8">{merch.map(item => <MerchCard key={item.id} item={item} />)}</div></div>);
+const FundingSection = ({ funding, isReadOnly = true }) => { const percentage = (funding?.current / funding?.goal) * 100 || 0; return (<div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-lg"><h3 className="text-2xl font-bold mb-2">Team Funding Goal</h3><p className="text-gray-600 dark:text-gray-400 mb-6">Raising funds for new equipment!</p><div className="space-y-4"><div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-4"><div className="bg-green-500 h-4 rounded-full" style={{ width: `${percentage}%` }}></div></div><div className="flex justify-between text-sm font-medium"><span>${funding?.current?.toLocaleString() || 0} Raised</span><span>${funding?.goal?.toLocaleString() || 10000} Goal</span></div><button className="w-full bg-green-500 text-white px-6 py-3 rounded-lg font-semibold hover:bg-green-600 shadow-lg text-lg">{isReadOnly ? 'Support Team' : 'Manage Funding'}</button></div></div>);};
+const MerchSection = ({ merch }) => (<div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-lg"><h3 className="text-2xl font-bold mb-6">Official Merchandise</h3><div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-8">{(merch || []).map(item => <MerchCard key={item.id} item={item} />)}</div></div>);
 const MerchCard = ({ item }) => (<div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden"><img src={item.image} alt={item.name} className="w-full h-56 object-cover" /><div className="p-4"><h4 className="font-bold text-lg">{item.name}</h4><p className="text-gray-500 mb-3">${item.price}</p><button className="w-full bg-blue-500 text-white px-4 py-2 rounded-lg font-semibold hover:bg-blue-600">Add to Cart</button></div></div>);
-
