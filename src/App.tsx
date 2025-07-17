@@ -4,15 +4,13 @@ import { supabase } from './supabaseClient'; // Import the Supabase client
 import { Session, User } from '@supabase/supabase-js';
 
 // --- Type Definitions ---
-// It's good practice to define the shapes of your data
 type Profile = {
     id: string;
     full_name: string;
     avatar_url: string;
-    role: 'fan' | 'creator';
+    role: 'fan' | 'creator' | null; // Role can now be null
     bio?: string;
     followed_clubs?: number[];
-    managed_clubs?: number[];
 };
 
 type Club = {
@@ -39,55 +37,55 @@ type Funding = { id: number; current: number; goal: number; };
 // --- MAIN APP COMPONENT ---
 
 export default function App() {
-    // Core state for user, page navigation, and data
     const [currentUser, setCurrentUser] = useState<Profile & User | null>(null);
     const [page, setPage] = useState('login');
     const [pageContext, setPageContext] = useState({});
     const [history, setHistory] = useState([]);
-    const [pendingUser, setPendingUser] = useState(null);
-
-    // App's data state
+    
     const [clubs, setClubs] = useState<Club[]>([]);
     const [users, setUsers] = useState<Profile[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-
-    // UI state
     const [darkMode, setDarkMode] = useState(false);
 
-    // Check for logged-in user on initial load
+    // This effect is the single source of truth for handling user sessions.
     useEffect(() => {
-        const getSession = async () => {
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
             setIsLoading(true);
-            const { data: { session } } = await supabase.auth.getSession();
-            if (session?.user) {
+            if (!session?.user) {
+                // If no session, ensure user is logged out.
+                setCurrentUser(null);
+                setPage('login');
+                setHistory([]);
+            } else {
+                // If there is a session, check for a complete profile.
                 const { data: userProfile } = await supabase
                     .from('profiles')
                     .select('*')
                     .eq('id', session.user.id)
                     .single();
-                if (userProfile) {
+
+                if (userProfile && userProfile.role) {
+                    // Profile is complete, set the user and navigate to their dashboard.
                     setCurrentUser({ ...session.user, ...userProfile });
-                    navigateTo(userProfile.role === 'fan' ? 'fanDashboard' : 'creatorDashboard');
+                    // Only navigate if not already on a dashboard page to avoid loops.
+                    if (page === 'login' || page === 'signup' || page === 'roleChooser') {
+                         navigateTo(userProfile.role === 'fan' ? 'fanDashboard' : 'creatorDashboard');
+                    }
+                } else {
+                    // Profile is incomplete (no role), navigate to role chooser.
+                    // This happens for all new users (email or OAuth).
+                    setCurrentUser(session.user as any); // Set partial user data
+                    navigateTo('roleChooser');
                 }
             }
             setIsLoading(false);
-        };
-        getSession();
-
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-            if (!session && currentUser) {
-                handleLogout();
-            } else if (session?.user && !currentUser) {
-                 getSession();
-            }
         });
 
         return () => subscription.unsubscribe();
     }, []);
     
-    // Fetch data when user is logged in
     useEffect(() => {
-        if(currentUser) {
+        if(currentUser?.role) { // Only fetch data if user has a role
             fetchClubs();
             fetchUsers();
         }
@@ -116,7 +114,7 @@ export default function App() {
 
     // --- Data Fetching ---
     const fetchClubs = async () => {
-        const { data, error } = await supabase.from('clubs').select(`*, players(*), posts(*, comments(*)), merch(*), funding(*)`);
+        const { data, error } = await supabase.from('clubs').select(`*, players(*), posts(*, comments(*))`);
         if (error) console.error('Error fetching clubs:', error);
         else setClubs(data || []);
     };
@@ -129,38 +127,21 @@ export default function App() {
 
     // --- Authentication Handlers ---
     const handleLogin = async (email, password) => {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) {
             alert(error.message);
             return false;
         }
-        if (data.user) {
-             const { data: userProfile } = await supabase.from('profiles').select('*').eq('id', data.user.id).single();
-             if (userProfile) {
-                setCurrentUser({ ...data.user, ...userProfile });
-                setHistory([]); 
-                navigateTo(userProfile.role === 'fan' ? 'fanDashboard' : 'creatorDashboard');
-             }
-        }
         return true;
     };
 
-    const initiateSignUp = (name, email, password) => {
-        setPendingUser({ name, email, password });
-        navigateTo('roleChooser');
-    };
-
-    const completeSignUp = async (role) => {
-        if (!pendingUser) return;
-        const { name, email, password } = pendingUser;
-        
+    const handleSignUp = async (name, email, password) => {
         const { data: authData, error: authError } = await supabase.auth.signUp({
             email,
             password,
             options: {
                 data: {
                     full_name: name,
-                    role: role,
                     avatar_url: `https://placehold.co/100x100/CCCCCC/FFFFFF?text=${name.charAt(0)}`
                 }
             }
@@ -168,13 +149,31 @@ export default function App() {
 
         if (authError) {
             alert(authError.message);
-            return;
+            return false;
         }
         
         if (authData.user) {
             alert("Sign-up successful! Please check your email to confirm your account.");
-            setPendingUser(null);
             navigateTo('login');
+        }
+        return true;
+    };
+
+    const handleSetRole = async (role) => {
+        if (!currentUser) return;
+
+        const { data, error } = await supabase
+            .from('profiles')
+            .update({ role: role })
+            .eq('id', currentUser.id)
+            .select()
+            .single();
+        
+        if (error) {
+            alert("Could not set role. Please try again.");
+        } else {
+            setCurrentUser({ ...currentUser, ...data });
+            navigateTo(data.role === 'fan' ? 'fanDashboard' : 'creatorDashboard');
         }
     };
 
@@ -278,10 +277,10 @@ export default function App() {
             return <div className="flex justify-center items-center h-screen"><div className="loader"></div></div>;
         }
 
-        if (!currentUser) {
+        if (!currentUser || !currentUser.role) {
             switch (page) {
-                case 'signup': return <SignUpPage onInitiateSignUp={initiateSignUp} navigateTo={navigateTo} onGoogleSignIn={handleGoogleSignIn} />;
-                case 'roleChooser': return <RoleChooserPage onCompleteSignUp={completeSignUp} />;
+                case 'signup': return <SignUpPage onSignUp={handleSignUp} navigateTo={navigateTo} onGoogleSignIn={handleGoogleSignIn} />;
+                case 'roleChooser': return <RoleChooserPage onSetRole={handleSetRole} />;
                 default: return <LoginPage onLogin={handleLogin} navigateTo={navigateTo} onGoogleSignIn={handleGoogleSignIn} />;
             }
         }
@@ -297,8 +296,8 @@ export default function App() {
             case 'clubManagement': return <ClubManagementPage club={selectedClub} onAddPost={handleAddPost} onAddPlayer={handleAddPlayer} onUpdateClub={handleUpdateClub}/>;
             case 'clubPublicView': return <ClubPublicView club={selectedClub} navigateTo={navigateTo} users={users} onAddComment={handleAddComment} currentUser={currentUser} onToggleFollow={handleToggleFollow} />;
             case 'fanProfile': return <FanProfilePage user={currentUser} onUpdateUser={handleUpdateUser} />;
-            case 'postDetail': return <PostDetailView post={selectedPost} club={selectedClub} navigateBack={navigateBack} users={users} onAddComment={onAddComment} currentUser={currentUser} />;
-            default: return <LoginPage onLogin={handleLogin} navigateTo={navigateTo} onGoogleSignIn={handleGoogleSignIn} />;
+            case 'postDetail': return <PostDetailView post={selectedPost} club={selectedClub} navigateBack={navigateBack} users={users} onAddComment={handleAddComment} currentUser={currentUser} />;
+            default: return <LoginPage onLogin={handleLogin} navigateTo={navigateTo} />;
         }
     };
 
@@ -314,8 +313,6 @@ export default function App() {
 }
 
 // --- CORE COMPONENTS ---
-// ... (The rest of the components remain largely the same, but now receive real data)
-
 const Header = ({ user, onLogout, navigateTo, darkMode, setDarkMode }) => {
     const goHome = () => navigateTo(user.role === 'fan' ? 'fanDashboard' : 'creatorDashboard');
     return (
@@ -379,11 +376,11 @@ const LoginPage = ({ onLogin, navigateTo, onGoogleSignIn }) => {
     );
 };
 
-const SignUpPage = ({ onInitiateSignUp, navigateTo, onGoogleSignIn }) => {
+const SignUpPage = ({ onSignUp, navigateTo, onGoogleSignIn }) => {
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-    const handleSubmit = (e) => { e.preventDefault(); onInitiateSignUp(name, email, password); };
+    const handleSubmit = (e) => { e.preventDefault(); onSignUp(name, email, password); };
 
     return (
         <AuthLayout title="Create Account">
@@ -391,7 +388,7 @@ const SignUpPage = ({ onInitiateSignUp, navigateTo, onGoogleSignIn }) => {
                 <div><label className="block text-sm font-medium mb-1">Full Name</label><input type="text" value={name} onChange={e=>setName(e.target.value)} required className="w-full p-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600"/></div>
                 <div><label className="block text-sm font-medium mb-1">Email</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} required className="w-full p-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600"/></div>
                 <div><label className="block text-sm font-medium mb-1">Password</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} required className="w-full p-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600"/></div>
-                <button type="submit" className="w-full bg-blue-500 text-white py-2 rounded-lg hover:bg-blue-600 transition-colors">Continue</button>
+                <button type="submit" className="w-full bg-blue-500 text-white py-2 rounded-lg hover:bg-blue-600 transition-colors">Sign Up</button>
             </form>
             <div className="relative my-4"><div className="absolute inset-0 flex items-center"><span className="w-full border-t dark:border-gray-600"></span></div><div className="relative flex justify-center text-xs uppercase"><span className="bg-white dark:bg-gray-800 px-2 text-gray-500">Or</span></div></div>
             <GoogleButton onClick={onGoogleSignIn} text="Sign up with Google" />
@@ -400,7 +397,7 @@ const SignUpPage = ({ onInitiateSignUp, navigateTo, onGoogleSignIn }) => {
     );
 };
 
-const RoleChooserPage = ({ onCompleteSignUp }) => (
+const RoleChooserPage = ({ onSetRole }) => (
     <div className="flex flex-col items-center justify-center min-h-screen -mt-20">
         <div className="text-center mb-12">
             <Shield className="text-blue-500 mx-auto" size={64} />
@@ -408,16 +405,16 @@ const RoleChooserPage = ({ onCompleteSignUp }) => (
             <p className="text-lg text-gray-600 dark:text-gray-300 max-w-2xl mx-auto mt-2">How would you like to use ClubConnect?</p>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-4xl">
-            <div onClick={() => onCompleteSignUp('fan')} className="bg-white dark:bg-gray-800 p-10 rounded-2xl shadow-lg hover:shadow-2xl transition-shadow duration-300 cursor-pointer text-center transform hover:-translate-y-2"><Users className="text-green-500 mx-auto" size={48} /><h2 className="text-3xl font-bold mt-4">I'm a Fan</h2><p className="text-gray-600 dark:text-gray-400 mt-2">Follow your favorite clubs, get updates, and support your teams.</p></div>
-            <div onClick={() => onCompleteSignUp('creator')} className="bg-white dark:bg-gray-800 p-10 rounded-2xl shadow-lg hover:shadow-2xl transition-shadow duration-300 cursor-pointer text-center transform hover:-translate-y-2"><Edit className="text-purple-500 mx-auto" size={48} /><h2 className="text-3xl font-bold mt-4">I'm a Creator</h2><p className="text-gray-600 dark:text-gray-400 mt-2">Create and manage your club's page, post updates, and engage with fans.</p></div>
+            <div onClick={() => onSetRole('fan')} className="bg-white dark:bg-gray-800 p-10 rounded-2xl shadow-lg hover:shadow-2xl transition-shadow duration-300 cursor-pointer text-center transform hover:-translate-y-2"><Users className="text-green-500 mx-auto" size={48} /><h2 className="text-3xl font-bold mt-4">I'm a Fan</h2><p className="text-gray-600 dark:text-gray-400 mt-2">Follow your favorite clubs, get updates, and support your teams.</p></div>
+            <div onClick={() => onSetRole('creator')} className="bg-white dark:bg-gray-800 p-10 rounded-2xl shadow-lg hover:shadow-2xl transition-shadow duration-300 cursor-pointer text-center transform hover:-translate-y-2"><Edit className="text-purple-500 mx-auto" size={48} /><h2 className="text-3xl font-bold mt-4">I'm a Creator</h2><p className="text-gray-600 dark:text-gray-400 mt-2">Create and manage your club's page, post updates, and engage with fans.</p></div>
         </div>
     </div>
 );
 
 
 // --- FAN EXPERIENCE ---
-// The rest of the components remain largely the same but will now receive live data
-// from the main App component. Small adjustments are made to access nested data correctly.
+// ... (The rest of the components remain largely the same, but now receive live data)
+// Note: Some components are simplified for this example.
 const FanDashboard = ({ currentUser, clubs, navigateTo, users, onAddComment }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const followedClubsPosts = clubs.filter(club => currentUser.followed_clubs?.includes(club.id)).flatMap(club => (club.posts || []).map(post => ({ ...post, club }))).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
