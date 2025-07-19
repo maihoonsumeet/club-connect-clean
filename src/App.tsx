@@ -1,4 +1,4 @@
-// App.tsx
+// App.tsx - FIXED VERSION
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from './supabaseClient';
@@ -51,6 +51,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<Profile & User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -58,108 +59,123 @@ export default function App() {
     document.documentElement.classList.toggle('dark', darkMode);
   }, [darkMode]);
 
-  useEffect(() => {
-    const checkSession = async () => {
-      setIsLoading(true);
-      const {
-        data: { session }
-      } = await supabase.auth.getSession();
-
-      if (session?.user) {
-        const user = session.user;
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', user.id)
-          .single();
-
-        if (profile) {
-          const userWithProfile = { ...user, ...profile };
-          setCurrentUser(userWithProfile);
-
-          if (!profile.role) {
-            navigate('/choose-role');
-          } else {
-            navigate('/dashboard');
-          }
-        }
+  // Helper function to handle navigation based on user state
+  const handleUserNavigation = (user: Profile & User | null, currentPath: string) => {
+    if (!user) {
+      if (currentPath !== '/login' && currentPath !== '/signup') {
+        navigate('/login');
       }
+      return;
+    }
 
-      setIsLoading(false);
-    };
+    if (!user.role) {
+      if (currentPath !== '/choose-role') {
+        navigate('/choose-role');
+      }
+      return;
+    }
 
-    checkSession();
-  }, []);
+    // User has a role - redirect from auth pages to dashboard
+    if (currentPath === '/login' || currentPath === '/signup' || currentPath === '/') {
+      navigate('/dashboard');
+    }
+  };
 
   useEffect(() => {
     const {
       data: { subscription }
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('Auth state change:', event, session?.user?.id);
+      
       setIsLoading(true);
 
-      if (session?.user) {
-        const user = session.user;
-        const { data: userProfile, error: fetchError } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', user.id)
-          .single();
-
-        let profile = userProfile;
-
-        if (!userProfile && !fetchError) {
-          const defaultUsername = user.user_metadata.full_name || user.email?.split('@')[0] || 'user';
-          await supabase.from('profiles').insert([
-            {
-              id: user.id,
-              email: user.email,
-              username: defaultUsername,
-              full_name: user.user_metadata.full_name || '',
-              avatar_url: user.user_metadata.avatar_url || '',
-              role: null
-            }
-          ]);
-
-          const { data: insertedProfile } = await supabase
+      try {
+        if (session?.user) {
+          const user = session.user;
+          
+          // Try to get existing profile
+          const { data: userProfile, error: fetchError } = await supabase
             .from('profiles')
             .select('*')
             .eq('id', user.id)
             .single();
 
-          profile = insertedProfile;
-        }
+          let profile = userProfile;
 
-        if (profile) {
-          const userWithProfile = { ...user, ...profile };
-          setCurrentUser(userWithProfile);
+          // Create profile if it doesn't exist
+          if (!userProfile && fetchError?.code === 'PGRST116') {
+            console.log('Creating new profile for user:', user.id);
+            
+            const defaultUsername = user.user_metadata.full_name || user.email?.split('@')[0] || 'user';
+            const { error: insertError } = await supabase.from('profiles').insert([
+              {
+                id: user.id,
+                email: user.email,
+                username: defaultUsername,
+                full_name: user.user_metadata.full_name || '',
+                avatar_url: user.user_metadata.avatar_url || '',
+                role: null
+              }
+            ]);
 
-          if (!profile.role) {
-            navigate('/choose-role');
-          } else if (
-            location.pathname === '/login' ||
-            location.pathname === '/signup' ||
-            location.pathname === '/'
-          ) {
-            navigate('/dashboard');
+            if (insertError) {
+              console.error('Error creating profile:', insertError);
+              setCurrentUser(null);
+              setIsLoading(false);
+              return;
+            }
+
+            // Fetch the newly created profile
+            const { data: insertedProfile } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', user.id)
+              .single();
+
+            profile = insertedProfile;
+          }
+
+          if (profile) {
+            const userWithProfile = { ...user, ...profile };
+            setCurrentUser(userWithProfile);
+            
+            // Only navigate after initial load is complete
+            if (initialLoadComplete) {
+              handleUserNavigation(userWithProfile, location.pathname);
+            }
+          }
+        } else {
+          setCurrentUser(null);
+          
+          // Only navigate after initial load is complete
+          if (initialLoadComplete) {
+            handleUserNavigation(null, location.pathname);
           }
         }
-      } else {
+      } catch (error) {
+        console.error('Error in auth state change:', error);
         setCurrentUser(null);
-        if (
-          location.pathname !== '/login' &&
-          location.pathname !== '/signup'
-        ) {
-          navigate('/login');
-        }
       }
 
       setIsLoading(false);
+      
+      // Mark initial load as complete after first auth check
+      if (!initialLoadComplete) {
+        setInitialLoadComplete(true);
+      }
     });
 
     return () => subscription.unsubscribe();
-  }, [navigate, location.pathname]);
+  }, [navigate, location.pathname, initialLoadComplete]);
 
-  if (isLoading) {
+  // Handle navigation after initial load is complete
+  useEffect(() => {
+    if (initialLoadComplete && !isLoading) {
+      handleUserNavigation(currentUser, location.pathname);
+    }
+  }, [initialLoadComplete, isLoading, currentUser, location.pathname]);
+
+  if (isLoading || !initialLoadComplete) {
     return (
       <div className="flex justify-center items-center h-screen">
         <LoadingSpinner />
@@ -189,7 +205,11 @@ export default function App() {
             </>
           )}
 
-          <Route path="*" element={currentUser ? (currentUser.role ? <div /> : <RoleChooserPage user={currentUser} />) : <LoginPage />} />
+          <Route path="*" element={
+            currentUser ? 
+              (currentUser.role ? <div>Page not found</div> : <RoleChooserPage user={currentUser} />) 
+              : <LoginPage />
+          } />
         </Routes>
       </main>
       {currentUser && currentUser.role && <Footer />}
