@@ -30,19 +30,40 @@ const LoginPage: React.FC = () => {
         e.preventDefault();
         setLoading(true);
         setError('');
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) {
-            setError(error.message);
-        } else {
-            navigate('/dashboard');
+        
+        try {
+            const { error } = await supabase.auth.signInWithPassword({ 
+                email, 
+                password 
+            });
+            
+            if (error) {
+                setError(error.message);
+            }
+            // Don't navigate here - let App.tsx handle it via auth state change
+        } catch (err) {
+            console.error('Login error:', err);
+            setError('An unexpected error occurred');
         }
+        
         setLoading(false);
     };
 
     const handleGoogleSignIn = async () => {
-        const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
-        if (error) {
-            setError(error.message);
+        try {
+            const { error } = await supabase.auth.signInWithOAuth({ 
+                provider: 'google',
+                options: {
+                    redirectTo: `${window.location.origin}/dashboard`
+                }
+            });
+            
+            if (error) {
+                setError(error.message);
+            }
+        } catch (err) {
+            console.error('Google sign-in error:', err);
+            setError('An unexpected error occurred');
         }
     };
 
