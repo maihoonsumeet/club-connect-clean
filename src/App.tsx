@@ -14,6 +14,8 @@ import PostDetailView from './pages/PostDetailView';
 import FanProfilePage from './pages/FanProfilePage';
 import CreateClubPage from './pages/CreateClubPage';
 import ClubManagementPage from './pages/ClubManagementPage';
+import useAuthRedirectHandler from "@/hooks/useAuthRedirectHandler";
+import useSyncUserProfile from "@/hooks/useSyncUserProfile";
 
 // Import Shared Components
 import Header from './components/Header';
@@ -59,33 +61,79 @@ export default function App() {
     }, [darkMode]);
 
     useEffect(() => {
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-            setIsLoading(true);
-            if (session?.user) {
-                const { data: userProfile } = await supabase
+    const {
+        data: { subscription }
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+        setIsLoading(true);
+
+        if (session?.user) {
+            const user = session.user;
+
+            // 1. Try to fetch profile
+            const { data: userProfile, error: fetchError } = await supabase
+                .from('profiles')
+                .select('*')
+                .eq('id', user.id)
+                .single();
+
+            let profile = userProfile;
+
+            // 2. If no profile exists (Google login), insert one
+            if (!userProfile && !fetchError) {
+                const defaultUsername = user.user_metadata.full_name || user.email?.split('@')[0] || 'user';
+
+                const { error: insertError } = await supabase
+                    .from('profiles')
+                    .insert([
+                        {
+                            id: user.id,
+                            email: user.email,
+                            username: defaultUsername,
+                            full_name: user.user_metadata.full_name || '',
+                            avatar_url: user.user_metadata.avatar_url || '',
+                            role: null,
+                        },
+                    ]);
+
+                if (insertError) {
+                    console.error('Profile insert error:', insertError.message);
+                }
+
+                // Fetch again after insert
+                const { data: insertedProfile } = await supabase
                     .from('profiles')
                     .select('*')
-                    .eq('id', session.user.id)
+                    .eq('id', user.id)
                     .single();
-                
-                if (userProfile) {
-                    const userWithProfile = { ...session.user, ...userProfile };
-                    setCurrentUser(userWithProfile);
-                    if (!userProfile.role) {
-                        navigate('/choose-role');
-                    } else if (location.pathname === '/login' || location.pathname === '/signup' || location.pathname === '/') {
-                        navigate('/dashboard');
-                    }
-                }
-            } else {
-                setCurrentUser(null);
-                navigate('/login');
+
+                profile = insertedProfile;
             }
-            setIsLoading(false);
-        });
+
+            if (profile) {
+                const userWithProfile = { ...user, ...profile };
+                setCurrentUser(userWithProfile);
+
+                if (!profile.role) {
+                    navigate('/choose-role');
+                } else if (
+                    location.pathname === '/login' ||
+                    location.pathname === '/signup' ||
+                    location.pathname === '/'
+                ) {
+                    navigate('/dashboard');
+                }
+            }
+        } else {
+            setCurrentUser(null);
+            navigate('/login');
+        }
+
+        setIsLoading(false);
+    });
 
         return () => subscription.unsubscribe();
     }, [navigate, location.pathname]);
+
 
     if (isLoading) {
         return <div className="flex justify-center items-center h-screen"><LoadingSpinner /></div>;
