@@ -1,10 +1,10 @@
-// App.tsx - FIXED VERSION
+// App.tsx
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from './supabaseClient';
 import { User } from '@supabase/supabase-js';
 
-// Import Pages
+// Pages
 import LoginPage from './pages/LoginPage';
 import SignUpPage from './pages/SignUpPage';
 import RoleChooserPage from './pages/RoleChooserPage';
@@ -21,7 +21,6 @@ import Header from './components/Header';
 import Footer from './components/Footer';
 import LoadingSpinner from './components/LoadingSpinner';
 
-// Types
 export type Profile = {
   id: string;
   full_name: string;
@@ -59,7 +58,6 @@ export default function App() {
     document.documentElement.classList.toggle('dark', darkMode);
   }, [darkMode]);
 
-  // Helper function to handle navigation based on user state
   const handleUserNavigation = (user: Profile & User | null, currentPath: string) => {
     if (!user) {
       if (currentPath !== '/login' && currentPath !== '/signup') {
@@ -75,25 +73,18 @@ export default function App() {
       return;
     }
 
-    // User has a role - redirect from auth pages to dashboard
     if (currentPath === '/login' || currentPath === '/signup' || currentPath === '/') {
       navigate('/dashboard');
     }
   };
 
   useEffect(() => {
-    const {
-      data: { subscription }
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('Auth state change:', event, session?.user?.id);
-      
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setIsLoading(true);
-
       try {
         if (session?.user) {
           const user = session.user;
-          
-          // Try to get existing profile
+
           const { data: userProfile, error: fetchError } = await supabase
             .from('profiles')
             .select('*')
@@ -102,16 +93,10 @@ export default function App() {
 
           let profile = userProfile;
 
-          // Create profile if it doesn't exist
           if (!userProfile && fetchError?.code === 'PGRST116') {
-            console.log('Creating new profile for user:', user.id);
-            
-            const defaultUsername = user.user_metadata.full_name || user.email?.split('@')[0] || 'user';
             const { error: insertError } = await supabase.from('profiles').insert([
               {
                 id: user.id,
-                email: user.email,
-                username: defaultUsername,
                 full_name: user.user_metadata.full_name || '',
                 avatar_url: user.user_metadata.avatar_url || '',
                 role: null
@@ -125,7 +110,6 @@ export default function App() {
               return;
             }
 
-            // Fetch the newly created profile
             const { data: insertedProfile } = await supabase
               .from('profiles')
               .select('*')
@@ -138,28 +122,25 @@ export default function App() {
           if (profile) {
             const userWithProfile = { ...user, ...profile };
             setCurrentUser(userWithProfile);
-            
-            // Only navigate after initial load is complete
+
             if (initialLoadComplete) {
               handleUserNavigation(userWithProfile, location.pathname);
             }
+          } else {
+            setCurrentUser(null);
           }
         } else {
           setCurrentUser(null);
-          
-          // Only navigate after initial load is complete
           if (initialLoadComplete) {
             handleUserNavigation(null, location.pathname);
           }
         }
-      } catch (error) {
-        console.error('Error in auth state change:', error);
+      } catch (err) {
+        console.error('Auth error:', err);
         setCurrentUser(null);
       }
 
       setIsLoading(false);
-      
-      // Mark initial load as complete after first auth check
       if (!initialLoadComplete) {
         setInitialLoadComplete(true);
       }
@@ -168,7 +149,6 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, [navigate, location.pathname, initialLoadComplete]);
 
-  // Handle navigation after initial load is complete
   useEffect(() => {
     if (initialLoadComplete && !isLoading) {
       handleUserNavigation(currentUser, location.pathname);
@@ -185,7 +165,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-100 font-sans">
-      {currentUser && currentUser.role && (
+      {currentUser?.role && (
         <Header user={currentUser} setDarkMode={setDarkMode} darkMode={darkMode} />
       )}
       <main className="container mx-auto px-4 py-8">
@@ -196,7 +176,11 @@ export default function App() {
           {currentUser && (
             <>
               <Route path="/choose-role" element={<RoleChooserPage user={currentUser} />} />
-              <Route path="/dashboard" element={currentUser.role === 'fan' ? <FanDashboard currentUser={currentUser} /> : <CreatorDashboard currentUser={currentUser} />} />
+              <Route path="/dashboard" element={
+                currentUser.role === 'fan'
+                  ? <FanDashboard currentUser={currentUser} />
+                  : <CreatorDashboard currentUser={currentUser} />
+              } />
               <Route path="/profile" element={<FanProfilePage user={currentUser} />} />
               <Route path="/club/:clubId" element={<ClubPublicView currentUser={currentUser} />} />
               <Route path="/post/:postId" element={<PostDetailView currentUser={currentUser} />} />
@@ -206,13 +190,15 @@ export default function App() {
           )}
 
           <Route path="*" element={
-            currentUser ? 
-              (currentUser.role ? <div>Page not found</div> : <RoleChooserPage user={currentUser} />) 
+            currentUser
+              ? (currentUser.role
+                ? <div>Page not found</div>
+                : <RoleChooserPage user={currentUser} />)
               : <LoginPage />
           } />
         </Routes>
       </main>
-      {currentUser && currentUser.role && <Footer />}
+      {currentUser?.role && <Footer />}
     </div>
   );
 }
