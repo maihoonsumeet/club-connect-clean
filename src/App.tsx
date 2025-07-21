@@ -202,3 +202,53 @@ export default function App() {
     </div>
   );
 }
+
+useEffect(() => {
+  const getSessionAndProfile = async () => {
+    setIsLoading(true);
+
+    const { data: { session } } = await supabase.auth.getSession();
+
+    if (session?.user) {
+      const user = session.user;
+
+      // Fetch profile
+      const { data: profile, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+
+      if (error) {
+        console.error("Error fetching profile:", error);
+        setCurrentUser(null);
+        setIsLoading(false);
+        return;
+      }
+
+      const userWithProfile = { ...user, ...profile };
+      setCurrentUser(userWithProfile);
+
+    } else {
+      setCurrentUser(null);
+    }
+
+    setIsLoading(false);
+    setInitialLoadComplete(true);
+  };
+
+  getSessionAndProfile();
+
+  const {
+    data: { subscription }
+  } = supabase.auth.onAuthStateChange((_event, session) => {
+    console.log("Auth state change →", _event);
+    if (!session) {
+      setCurrentUser(null);
+    } else {
+      // optional: you could call getSessionAndProfile() again
+    }
+  });
+
+  return () => subscription.unsubscribe();
+}, []);
