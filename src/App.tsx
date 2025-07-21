@@ -252,3 +252,7 @@ useEffect(() => {
 
   return () => subscription.unsubscribe();
 }, []);
+
+if (isLoading || !initialLoadComplete) {
+  return <LoadingSpinner />;
+}
